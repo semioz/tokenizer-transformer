@@ -3,9 +3,38 @@ from multiprocessing import Pool
 import os
 import regex as re
 
-from cs336_basics.pretokenization_example import find_chunk_boundaries
-
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+def find_chunk_boundaries(file, desired_num_chunks, split_special_token):
+    assert isinstance(split_special_token, bytes), "Must represent special token as a bytestring"
+
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+
+    chunk_size = file_size // desired_num_chunks
+    chunk_boundaries = [i * chunk_size for i in range(desired_num_chunks + 1)]
+    chunk_boundaries[-1] = file_size
+
+    mini_chunk_size = 4096
+    for bi in range(1, len(chunk_boundaries) - 1):
+        initial_position = chunk_boundaries[bi]
+        file.seek(initial_position)
+
+        while True:
+            mini_chunk = file.read(mini_chunk_size)
+            if mini_chunk == b"":
+                chunk_boundaries[bi] = file_size
+                break
+
+            found_at = mini_chunk.find(split_special_token)
+            if found_at != -1:
+                chunk_boundaries[bi] = initial_position + found_at
+                break
+
+            initial_position += mini_chunk_size
+
+    return sorted(set(chunk_boundaries))
 
 
 def pretokenize_text(text, special_tokens):
@@ -108,18 +137,20 @@ def build_pair_indexes(word_counts):
 
     return pair_counts, pair_to_words
 
+def build_vocab(special_tokens: list[str]) -> dict[int, bytes]:
+    vocab = {i: bytes([i]) for i in range(256)}
+    next_id = 256
+    for token in special_tokens:
+        vocab[next_id] = token.encode("utf-8")
+        next_id += 1
+    return vocab
+
 def train_bpe(
     input_path: str | os.PathLike,
     vocab_size: int,
     special_tokens: list[str],
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-        # 1. Build initial vocab, add special tokens
-        vocab = {i: bytes([i]) for i in range(256)}
-        next_id = 256
-        for token in special_tokens:
-            vocab[next_id] = token.encode("utf-8")
-            next_id += 1
-
+        vocab = build_vocab(special_tokens)
         word_counts = pretokenize_file(input_path, special_tokens)
 
         merges = []
