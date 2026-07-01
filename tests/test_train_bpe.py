@@ -1,5 +1,8 @@
 import json
 import time
+from collections import Counter
+
+from cs336_basics.train_bpe import pretokenize_file
 
 from .adapters import run_train_bpe
 from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
@@ -22,6 +25,17 @@ def test_train_bpe_speed():
     )
     end_time = time.time()
     assert end_time - start_time < 1.5
+
+
+def test_pretokenize_file_chunked_matches_serial():
+    input_path = FIXTURES_PATH / "corpus.en"
+    special_tokens = ["<|endoftext|>"]
+
+    serial_counts = pretokenize_file(input_path, special_tokens, num_processes=1)
+    chunked_counts = pretokenize_file(input_path, special_tokens, num_processes=4)
+
+    assert isinstance(chunked_counts, Counter)
+    assert chunked_counts == serial_counts
 
 
 def test_train_bpe():
