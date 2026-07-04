@@ -5,6 +5,9 @@ from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
 
 import numpy.typing as npt
+from cs336_basics.data_loader import get_batch
+from cs336_basics.utils import get_lr_cosine_schedule, gradient_clipping
+from cs336_basics.optimizer import AdamW
 from cs336_basics.train_bpe import train_bpe
 from cs336_basics.tokenizer import Tokenizer
 from cs336_basics.modules import Embedding, Linear, MultiHeadSelfAttention, RMSNorm, RotaryPositionalEmbedding, SwiGLU, TransformerBlock, TransformerLM, scaled_dot_product_attention, softmax
@@ -469,7 +472,7 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    return get_batch(dataset, batch_size, context_length, device)
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -518,14 +521,14 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
@@ -553,7 +556,13 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return get_lr_cosine_schedule(
+        it,
+        max_learning_rate,
+        min_learning_rate,
+        warmup_iters,
+        cosine_cycle_iters,
+    )
 
 
 def run_save_checkpoint(
