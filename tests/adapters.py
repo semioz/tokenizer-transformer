@@ -6,7 +6,12 @@ from typing import IO, Any, BinaryIO
 
 import numpy.typing as npt
 from cs336_basics.data_loader import get_batch
-from cs336_basics.utils import get_lr_cosine_schedule, gradient_clipping
+from cs336_basics.utils import (
+    get_lr_cosine_schedule,
+    gradient_clipping,
+    save_checkpoint,
+    load_checkpoint,
+)
 from cs336_basics.optimizer import AdamW
 from cs336_basics.train_bpe import train_bpe
 from cs336_basics.tokenizer import Tokenizer
@@ -581,7 +586,7 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    save_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -602,7 +607,7 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    return load_checkpoint(src, model, optimizer)
 
 
 def get_tokenizer(

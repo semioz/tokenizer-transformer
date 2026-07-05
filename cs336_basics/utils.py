@@ -1,4 +1,7 @@
 import math
+import os
+from typing import BinaryIO, IO
+
 import torch
 
 # Cosine annealing: decay LR from alpha_max to alpha_min along a half-cosine
@@ -48,3 +51,28 @@ def gradient_clipping(parameters, max_l2_norm: float, eps: float = 1e-6) -> None
     if clip_coef < 1:
         for g in grads:
             g.mul_(clip_coef)
+
+def save_checkpoint(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    iteration: int,
+    out: str | os.PathLike | BinaryIO | IO[bytes],
+) -> None:
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "iteration": iteration,
+        },
+        out,
+    )
+
+def load_checkpoint(
+    src: str | os.PathLike | BinaryIO | IO[bytes],
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+) -> int:
+    obj = torch.load(src, weights_only=False)
+    model.load_state_dict(obj["model"])
+    optimizer.load_state_dict(obj["optimizer"])
+    return obj["iteration"]
