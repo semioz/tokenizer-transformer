@@ -6,7 +6,7 @@ def softmax_temperature(logits: torch.Tensor, temperature: float) -> torch.Tenso
         probs = torch.zeros_like(logits)
         probs[logits.argmax()] = 1.0
         return probs
-    return softmax(logits / temperature, dim=-1)
+    return softmax(logits / temperature, dim=-1) 
 
 
 def top_p_filter(probs: torch.Tensor, p: float) -> torch.Tensor:
