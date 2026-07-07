@@ -1007,10 +1007,209 @@ RMSNorm is essential for good convergence quality, and its **position** matters:
 
 ---
 
+## Experiment 7: Position Embedding Ablation — RoPE vs NoPE
+
+**Problem**: Ablation 2: position embeddings / `no_pos_emb` (0.5 B200 hrs, 1 point)
+**Goal**: Compare the base Transformer with RoPE against the same model with no positional information at all (NoPE).
+**Deliverable**: Learning curve comparing RoPE and NoPE validation performance.
+
+### Implementation
+
+RoPE is disabled by passing `rope_theta=None` into the model. The attention module already skips rotary embeddings when no RoPE module is constructed, so NoPE keeps the causal mask but removes all explicit positional embedding information.
+
+Even without RoPE, the decoder-only Transformer can infer some position information from the causal mask. Position 0 can only attend to itself, position 1 can attend to two tokens, position 2 to three tokens, and so on. This gives each position a different visibility pattern, so the model can indirectly learn whether it is early or late in the sequence and which tokens came before it. However, this signal is weaker than RoPE because RoPE gives attention direct relative-position information, while NoPE must recover it indirectly from the triangular mask and context.
+
+Training flag:
+
+```sh
+--no-rope
+```
+
+### Comparison Setup
+
+Use the same 5000-step ablation setup as Experiments 5 and 6:
+
+| Parameter | Value |
+|---|---:|
+| vocab size | 10,000 |
+| context length | 256 |
+| d_model | 512 |
+| layers | 4 |
+| heads | 16 |
+| d_ff | 1344 |
+| batch size | 32 |
+| max LR | 1e-3 |
+| steps | 5,000 |
+| warmup | 200 |
+| eval every | 1,000 |
+
+### Run 7.1: RoPE Baseline
+
+Reusing the pre-norm/RMSNorm baseline from Run 5.1 / Run 6.1:
+
+| step | val loss |
+|---:|---:|
+| 1000 | 2.5662 |
+| 2000 | 2.0914 |
+| 3000 | 1.8089 |
+| 4000 | 1.6319 |
+
+Best validation loss: **1.6319** at step 4000.
+
+### Run 7.2: NoPE
+
+Command:
+
+```sh
+uv run python scripts/modal_train.py train --gpu B200 \
+  --train-path /data/tokenized/tinystories_train_ids.npy \
+  --val-path /data/tokenized/tinystories_valid_ids.npy \
+  --vocab-size 10000 --context-length 256 --d-model 512 --num-layers 4 \
+  --num-heads 16 --d-ff 1344 --rope-theta 10000.0 --batch-size 32 \
+  --num-steps 5000 --max-lr 1e-3 --warmup-steps 200 --weight-decay 0.01 \
+  --min-lr-ratio 0.1 --log-every 100 --eval-every 1000 --save-every 5000 \
+  --no-rope --checkpoint-dir /checkpoints/ablation_nope_lr_1e-3 \
+  --compile --wandb --wandb-run-name ablation_nope_lr_1e-3
+```
+
+**Results**:
+
+| step | train loss | val loss |
+|---:|---:|---:|
+| 1000 | 2.4049 | 2.2494 |
+| 2000 | 1.9282 | 2.0012 |
+| 3000 | 1.9373 | 1.8843 |
+| 4000 | 1.8048 | 1.7748 |
+| 4900 | 1.8361 | - |
+
+- Best validation loss: **1.7748** at step 4000
+- Final logged training loss: **1.8361** at step 4900
+- Initial training loss: **9.2863** at step 0
+- Total wall-clock time: **136.4 seconds** ≈ 2.3 minutes
+
+### RoPE vs NoPE Learning Curve
+
+| step | RoPE val loss | NoPE val loss | better |
+|---:|---:|---:|---|
+| 1000 | 2.5662 | **2.2494** | NoPE |
+| 2000 | 2.0914 | **2.0012** | NoPE |
+| 3000 | **1.8089** | 1.8843 | RoPE |
+| 4000 | **1.6319** | 1.7748 | RoPE |
+
+### Analysis
+
+NoPE trains and improves normally, so explicit positional embeddings are not strictly required for this small decoder-only model to learn TinyStories. The causal mask gives the model an indirect position signal because each timestep has a different visible prefix length. Early in training, NoPE even has slightly better validation loss than RoPE, which may be because it has a simpler attention computation to optimize initially.
+
+However, RoPE becomes better as training progresses. By step 4000, RoPE reaches `1.6319` validation loss while NoPE reaches `1.7748`, a gap of `0.1429`. This suggests the causal mask alone provides enough weak positional information to learn, but RoPE gives a stronger and more useful relative-position signal once the model has learned the basics. The final NoPE training loss is also worse than the RoPE baseline, so the gap is not just overfitting; NoPE is optimizing worse too.
+
+Conclusion: NoPE is viable but inferior here. The causal mask lets the model infer some position information, but explicit RoPE substantially improves later-stage convergence and validation quality.
+
+---
+
+## Experiment 8: Feed-Forward Ablation — SwiGLU vs SiLU
+
+**Problem**: Ablation 3: SwiGLU vs SiLU / `swiglu_ablation` (0.5 B200 hrs, 1 point)
+**Goal**: Test whether the gating mechanism in SwiGLU improves performance compared to a plain SiLU feed-forward network with approximately matched parameter count.
+**Deliverable**: Learning curve comparing SwiGLU and SiLU FFNs, plus discussion.
+
+### Explanation
+
+The baseline feed-forward network uses SwiGLU:
+
+```text
+SwiGLU(x) = W2( SiLU(W1 x) ⊙ W3 x )
+```
+
+This has two inner projections. `SiLU(W1 x)` computes activated features, while `W3 x` acts like a learned gate/value stream. Multiplying them lets the FFN conditionally amplify or suppress features before projecting back to `d_model`.
+
+The ablation replaces this with a plain SiLU FFN:
+
+```text
+FFN_SiLU(x) = W2( SiLU(W1 x) )
+```
+
+This removes the gate and uses only one inner feature stream. Because SwiGLU has three matrices while SiLU has two, the SiLU baseline should use a larger hidden dimension, `d_ff = 4 * d_model`, to approximately match the parameter count of SwiGLU with `d_ff ≈ 8/3 * d_model`. This makes the comparison mostly about the effect of gating, not model size.
+
+### Implementation
+
+Training flag:
+
+```sh
+--ffn-type swiglu  # default
+--ffn-type silu    # ablation
+```
+
+For the matched-parameter SiLU run, set `--d-ff 2048` because `4 * d_model = 4 * 512 = 2048`.
+
+### Run 8.1: SwiGLU Baseline
+
+Reusing the pre-norm/RMSNorm/SwiGLU baseline from Run 5.1 / Run 6.1:
+
+| step | val loss |
+|---:|---:|
+| 1000 | 2.5662 |
+| 2000 | 2.0914 |
+| 3000 | 1.8089 |
+| 4000 | 1.6319 |
+
+Best validation loss: **1.6319** at step 4000.
+
+### Run 8.2: SiLU FFN
+
+Command:
+
+```sh
+uv run python scripts/modal_train.py train --gpu B200 \
+  --train-path /data/tokenized/tinystories_train_ids.npy \
+  --val-path /data/tokenized/tinystories_valid_ids.npy \
+  --vocab-size 10000 --context-length 256 --d-model 512 --num-layers 4 \
+  --num-heads 16 --d-ff 2048 --rope-theta 10000.0 --batch-size 32 \
+  --num-steps 5000 --max-lr 1e-3 --warmup-steps 200 --weight-decay 0.01 \
+  --min-lr-ratio 0.1 --log-every 100 --eval-every 1000 --save-every 5000 \
+  --ffn-type silu --checkpoint-dir /checkpoints/ablation_silu_ffn_lr_1e-3 \
+  --compile --wandb --wandb-run-name ablation_silu_ffn_lr_1e-3
+```
+
+**Results**:
+
+| step | train loss | val loss |
+|---:|---:|---:|
+| 1000 | 2.1290 | 2.2696 |
+| 2000 | 1.8287 | 1.9141 |
+| 3000 | 1.8344 | 1.7906 |
+| 4000 | 1.7544 | 1.7137 |
+| 4900 | 1.6635 | - |
+
+- Best validation loss: **1.7137** at step 4000
+- Final logged training loss: **1.6635** at step 4900
+- Initial training loss: **9.2413** at step 0
+- Total wall-clock time: **202.0 seconds** ≈ 3.4 minutes
+
+### SwiGLU vs SiLU Learning Curve
+
+| step | SwiGLU val loss | SiLU val loss | better |
+|---:|---:|---:|---|
+| 1000 | 2.5662 | **2.2696** | SiLU |
+| 2000 | 2.0914 | **1.9141** | SiLU |
+| 3000 | 1.8089 | **1.7906** | SiLU |
+| 4000 | **1.6319** | 1.7137 | SwiGLU |
+
+### Analysis
+
+The matched-parameter SiLU FFN trains successfully and is actually better than SwiGLU early in the run. At 1000-3000 steps, SiLU has lower validation loss, suggesting the simpler non-gated FFN can optimize quickly at the start despite lacking multiplicative gating.
+
+By step 4000, however, SwiGLU overtakes SiLU. SwiGLU reaches `1.6319` validation loss while SiLU reaches `1.7137`, a gap of `0.0818`. This suggests the gate becomes useful later in training: once the model has learned basic token patterns, the multiplicative interaction in SwiGLU helps represent richer conditional features than a plain SiLU MLP with similar parameter count.
+
+Interestingly, SiLU has lower final training loss (`1.6635`) than the SwiGLU baseline (`1.7130`) but worse validation loss. This may indicate that the larger plain SiLU FFN fits the training batches well but generalizes slightly worse than the gated SwiGLU FFN.
+
+Conclusion: the SiLU FFN is a strong baseline and trains faster early, but SwiGLU gives better validation quality by the end of this 5000-step ablation. With approximately matched parameter counts, the gating mechanism appears beneficial for generalization and later-stage convergence.
+
+---
+
 ## Future Experiments
 
 _Planned:_
-- _7.2.5+: Additional ablations (TBD)_
+- _Complete Run 8.2 SiLU FFN and add SwiGLU vs SiLU learning curve._
 
 _Completed:_
 - _(none yet)_

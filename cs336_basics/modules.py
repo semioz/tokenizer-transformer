@@ -26,6 +26,9 @@ class Embedding(nn.Module):
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         return self.weight[token_ids]
 
+def silu(x: torch.Tensor) -> torch.Tensor:
+    return x * torch.sigmoid(x)
+
 class RMSNorm(nn.Module):
     def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
         super().__init__()
@@ -55,7 +58,20 @@ class SwiGLU(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         w1_x = self.w1(x)
-        return self.w2(w1_x * torch.sigmoid(w1_x) * self.w3(x))
+        return self.w2(silu(w1_x) * self.w3(x))
+
+class SiLUFFN(nn.Module):
+    def __init__(self, d_model: int, d_ff: int | None = None, device=None, dtype=None):
+        super().__init__()
+
+        if d_ff is None:
+            d_ff = 4 * d_model
+
+        self.w1 = Linear(d_model, d_ff, device=device, dtype=dtype)
+        self.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.w2(silu(self.w1(x)))
 
 class RotaryPositionalEmbedding(nn.Module):
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
@@ -163,11 +179,12 @@ class TransformerBlock(nn.Module):
         num_heads: int,
         d_ff: int,
         max_seq_len: int,
-        theta: float,
+        theta: float | None,
         device=None,
         dtype=None,
         use_rmsnorm: bool = True,
         post_norm: bool = False,
+        ffn_type: str = "swiglu",
     ):
         super().__init__()
         self.use_rmsnorm = use_rmsnorm
@@ -180,7 +197,12 @@ class TransformerBlock(nn.Module):
             device=device,
             dtype=dtype,
         )
-        self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        if ffn_type == "swiglu":
+            self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        elif ffn_type == "silu":
+            self.ffn = SiLUFFN(d_model, d_ff, device=device, dtype=dtype)
+        else:
+            raise ValueError(f"ffn_type must be 'swiglu' or 'silu', got {ffn_type!r}")
 
         if use_rmsnorm:
             self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
@@ -212,11 +234,12 @@ class TransformerLM(nn.Module):
         num_layers: int,
         num_heads: int,
         d_ff: int,
-        rope_theta: float,
+        rope_theta: float | None,
         device=None,
         dtype=None,
         use_rmsnorm: bool = True,
         post_norm: bool = False,
+        ffn_type: str = "swiglu",
     ):
         super().__init__()
         self.use_rmsnorm = use_rmsnorm
@@ -233,6 +256,7 @@ class TransformerLM(nn.Module):
                     dtype=dtype,
                     use_rmsnorm=use_rmsnorm,
                     post_norm=post_norm,
+                    ffn_type=ffn_type,
                 )
                 for _ in range(num_layers)
             ]

@@ -90,6 +90,7 @@ def train(cfg):
         device=device,
         use_rmsnorm=not cfg.no_rmsnorm,
         post_norm=cfg.post_norm,
+        ffn_type=cfg.ffn_type,
     )
 
     # torch.compile: inductor on cuda/cpu, aot_eager on mps (inductor unsupported).
@@ -174,6 +175,7 @@ def main():
     p.add_argument("--no-rmsnorm", action="store_true", help="Remove all RMSNorm layers (ablation)")
     p.add_argument("--post-norm", action="store_true", help="Use post-norm instead of pre-norm (ablation)")
     p.add_argument("--no-rope", action="store_true", help="Disable RoPE position embeddings (NoPE ablation)")
+    p.add_argument("--ffn-type", choices=("swiglu", "silu"), default="swiglu", help="Feed-forward network type")
     # optimizer
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--num-steps", type=int, default=10000)
