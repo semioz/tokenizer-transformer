@@ -166,9 +166,12 @@ class TransformerBlock(nn.Module):
         theta: float,
         device=None,
         dtype=None,
+        use_rmsnorm: bool = True,
+        post_norm: bool = False,
     ):
         super().__init__()
-        self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.use_rmsnorm = use_rmsnorm
+        self.post_norm = post_norm
         self.attn = MultiHeadSelfAttention(
             d_model,
             num_heads,
@@ -177,12 +180,28 @@ class TransformerBlock(nn.Module):
             device=device,
             dtype=dtype,
         )
-        self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
         self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
 
+        if use_rmsnorm:
+            self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
+            self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
+
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
-        x = x + self.attn(self.ln1(x), token_positions)
-        return x + self.ffn(self.ln2(x))
+        if self.post_norm:
+            # post-norm: normalize after residual addition
+            z = x + self.attn(x, token_positions)
+            if self.use_rmsnorm:
+                z = self.ln1(z)
+            y = z + self.ffn(z)
+            if self.use_rmsnorm:
+                y = self.ln2(y)
+            return y
+
+        # pre-norm: normalize before sublayer
+        h = self.ln1(x) if self.use_rmsnorm else x
+        x = x + self.attn(h, token_positions)
+        h2 = self.ln2(x) if self.use_rmsnorm else x
+        return x + self.ffn(h2)
 
 class TransformerLM(nn.Module):
     def __init__(
@@ -196,8 +215,11 @@ class TransformerLM(nn.Module):
         rope_theta: float,
         device=None,
         dtype=None,
+        use_rmsnorm: bool = True,
+        post_norm: bool = False,
     ):
         super().__init__()
+        self.use_rmsnorm = use_rmsnorm
         self.token_embeddings = Embedding(vocab_size, d_model, device=device, dtype=dtype)
         self.layers = nn.ModuleList(
             [
@@ -209,11 +231,14 @@ class TransformerLM(nn.Module):
                     rope_theta,
                     device=device,
                     dtype=dtype,
+                    use_rmsnorm=use_rmsnorm,
+                    post_norm=post_norm,
                 )
                 for _ in range(num_layers)
             ]
         )
-        self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
+        if use_rmsnorm:
+            self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
         self.lm_head = Linear(d_model, vocab_size, device=device, dtype=dtype)
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
@@ -223,7 +248,8 @@ class TransformerLM(nn.Module):
         for layer in self.layers:
             x = layer(x, token_positions)
 
-        return self.lm_head(self.ln_final(x))
+        h = self.ln_final(x) if self.use_rmsnorm else x
+        return self.lm_head(h)
 
 def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     shifted = logits - torch.max(logits, dim=-1, keepdim=True).values

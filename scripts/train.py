@@ -86,8 +86,10 @@ def train(cfg):
         num_layers=cfg.num_layers,
         num_heads=cfg.num_heads,
         d_ff=cfg.d_ff,
-        rope_theta=cfg.rope_theta,
+        rope_theta=None if cfg.no_rope else cfg.rope_theta,
         device=device,
+        use_rmsnorm=not cfg.no_rmsnorm,
+        post_norm=cfg.post_norm,
     )
 
     # torch.compile: inductor on cuda/cpu, aot_eager on mps (inductor unsupported).
@@ -169,6 +171,9 @@ def main():
     p.add_argument("--num-heads", type=int, default=8)
     p.add_argument("--d-ff", type=int, default=None, help="None = auto (8*d_model/3 rounded to 64)")
     p.add_argument("--rope-theta", type=float, default=10000.0)
+    p.add_argument("--no-rmsnorm", action="store_true", help="Remove all RMSNorm layers (ablation)")
+    p.add_argument("--post-norm", action="store_true", help="Use post-norm instead of pre-norm (ablation)")
+    p.add_argument("--no-rope", action="store_true", help="Disable RoPE position embeddings (NoPE ablation)")
     # optimizer
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--num-steps", type=int, default=10000)
